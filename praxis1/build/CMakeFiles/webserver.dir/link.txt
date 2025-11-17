@@ -1,0 +1,1 @@
+/usr/bin/cc -g -Wl,--dependency-file=CMakeFiles/webserver.dir/link.d CMakeFiles/webserver.dir/webserver.c.o -o webserver  -lm
