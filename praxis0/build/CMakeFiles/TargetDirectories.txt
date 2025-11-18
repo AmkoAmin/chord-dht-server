@@ -1,5 +1,0 @@
-/home/aminskenderi/rnv/Praxis0/build/CMakeFiles/hello_world.dir
-/home/aminskenderi/rnv/Praxis0/build/CMakeFiles/package.dir
-/home/aminskenderi/rnv/Praxis0/build/CMakeFiles/package_source.dir
-/home/aminskenderi/rnv/Praxis0/build/CMakeFiles/edit_cache.dir
-/home/aminskenderi/rnv/Praxis0/build/CMakeFiles/rebuild_cache.dir

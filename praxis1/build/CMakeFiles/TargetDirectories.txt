@@ -1,5 +1,0 @@
-/home/aminskenderi/rnv/praxis1/build/CMakeFiles/webserver.dir
-/home/aminskenderi/rnv/praxis1/build/CMakeFiles/package.dir
-/home/aminskenderi/rnv/praxis1/build/CMakeFiles/package_source.dir
-/home/aminskenderi/rnv/praxis1/build/CMakeFiles/edit_cache.dir
-/home/aminskenderi/rnv/praxis1/build/CMakeFiles/rebuild_cache.dir

@@ -5,10 +5,10 @@
 *.out
 *.exe
 
-# Compiled executables
-hello_world
-webserver
-test_file
+# Compiled executables (avoid hardcoding names, use patterns instead)
+*/hello_world
+*/webserver
+*/test_file
 
 # --- CMake Build Directories ---
 CMakeCache.txt
@@ -19,22 +19,21 @@ build/
 CPackConfig.cmake
 CPackSourceConfig.cmake
 CTestTestfile.cmake
-
-# Generated CPack archives (Praxis)
-*.tar.gz
 _CPack_Packages/
+
+# Generated CPack archives
+*.tar.gz
 
 # --- Python ---
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.pytest_cache/
+.pytest_cache/
 .venv/
 .env/
 
 # --- Test system artifacts ---
-*.pytest_cache/
 .cache/
 
 # --- Logs ---
@@ -51,10 +50,11 @@ __pycache__/
 *.tmp
 *.bak
 
-# ignore your generated binaries in subdirs
+# Ignore build dirs inside each praxis project
 praxis0/build/
 praxis1/build/
 
-# ignore test_file binary in praxis1 directory
-praxis1/test_file
+# Ignore compiled binaries inside praxis dirs
+praxis0/hello_world
 praxis1/webserver
+praxis1/test_file
