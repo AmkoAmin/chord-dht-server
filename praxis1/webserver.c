@@ -6,56 +6,13 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <stdbool.h>
+#include <unistd.h>
 
-int find_crlfcrlf(const char *buf, int len) {
-    
-    for (int i = 0; i <= len - 4; i++) {
-        
-        if (buf[i] == '\r' && buf[i+1] == '\n' && buf[i+2] == '\r' && buf[i+3] == '\n') {
-            return i;
-        }
+/*
+ * Ab hier Amins Header
+ */
 
-    }
-
-    return -1;
-}
-
-void get_messages(int sockfd, char *buf, int *buf_len) {
-    
-    const char reply[] = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
-
-    while (true) {
-        
-        int end = find_crlfcrlf(buf, *buf_len);
-        
-        if (end == -1) {
-            // Kein komplettes Paket ("\\r\\n\\r\\n") mehr im Buffer → fertig
-            break;
-        }
-
-        // Position von "\r\n\r\n" ist 'end'
-        int msg_len = end + 4; // +4 Zeichen für "\r\n\r\n"
-
-        // 2. Antwort "Reply\r\n\r\n" an denselben Socket senden:
-        size_t sent = send(sockfd, reply, sizeof(reply) - 1, 0);
-        if (sent == -1) {
-            perror("send");
-            // Bei Fehler brechen wir ab – Buffer behalten wir so wie er ist
-            break;
-        }
-
-        // 3. Verarbeitetes Paket aus dem Buffer entfernen:
-        int remaining = *buf_len - msg_len;
-
-        if (remaining > 0) {
-            // Rest an den Anfang schieben:
-            memmove(buf, buf + msg_len, remaining);
-        }
-
-        // Neue Länge des Buffers:
-        *buf_len = remaining;
-    }
-}
+#include <message_handler.h>
 
 int main(int argc, char *argv[])
 {
@@ -65,16 +22,12 @@ int main(int argc, char *argv[])
     struct addrinfo hints, *res;
     int sockfd, new_fd;
 
-    // first, load up address structs with getaddrinfo():
-
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;  // use IPv4 or IPv6, whichever
+    hints.ai_family = AF_UNSPEC;  
     hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;     // fill in my IP for me
+    hints.ai_flags = AI_PASSIVE;     
 
     getaddrinfo(argv[1], argv[2], &hints, &res);
-
-    // make a socket:
 
     sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
 
@@ -110,7 +63,7 @@ int main(int argc, char *argv[])
             
             buf_len += bytes;
             
-            get_messages(new_fd, buff, &buf_len);
+            get_messages_and_send(new_fd, buff, &buf_len);
         }
         close(new_fd);
     }
