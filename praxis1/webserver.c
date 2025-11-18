@@ -22,7 +22,7 @@ int find_crlfcrlf(const char *buf, int len) {
 
 void get_messages(int sockfd, char *buf, int *buf_len) {
     
-    const char reply[] = "Reply\r\n\r\n";
+    const char reply[] = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
 
     while (true) {
         
@@ -57,7 +57,7 @@ void get_messages(int sockfd, char *buf, int *buf_len) {
     }
 }
 
-int main(char *argv[])
+int main(int argc, char *argv[])
 {
     struct sockaddr_storage their_addr;
     socklen_t addr_size;
@@ -86,7 +86,7 @@ int main(char *argv[])
     int bind_info = bind(sockfd, res->ai_addr, res->ai_addrlen);
     printf("Bind-Info: %d\n", bind_info);
     
-    int lausch_info = listen(sockfd, 10);
+    int lausch_info = listen(sockfd, 100);
 
     printf("Lausch-Info: %d\n", lausch_info);
 
