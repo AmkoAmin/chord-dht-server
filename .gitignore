@@ -58,3 +58,8 @@ praxis1/build/
 praxis0/hello_world
 praxis1/webserver
 praxis1/test_file
+
+praxis1/.venv
+praxis1/.vscode
+praxis1/.rnvs_lock
+praxis1/tox.ini
