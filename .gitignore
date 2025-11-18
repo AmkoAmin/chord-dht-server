@@ -1,0 +1,60 @@
+# --- C/C++ Build Artefacts ---
+*.o
+*.a
+*.so
+*.out
+*.exe
+
+# Compiled executables
+hello_world
+webserver
+test_file
+
+# --- CMake Build Directories ---
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+build/
+CPackConfig.cmake
+CPackSourceConfig.cmake
+CTestTestfile.cmake
+
+# Generated CPack archives (Praxis)
+*.tar.gz
+_CPack_Packages/
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pytest_cache/
+.venv/
+.env/
+
+# --- Test system artifacts ---
+*.pytest_cache/
+.cache/
+
+# --- Logs ---
+*.log
+
+# --- Editor / IDE ---
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# --- Misc ---
+*.tmp
+*.bak
+
+# ignore your generated binaries in subdirs
+praxis0/build/
+praxis1/build/
+
+# ignore test_file binary in praxis1 directory
+praxis1/test_file
+praxis1/webserver
