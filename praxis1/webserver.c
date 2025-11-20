@@ -12,7 +12,7 @@
  * Ab hier Amins Header
  */
 
-#include <message_handler.h>
+#include "message_handler.h"
 
 int main(int argc, char *argv[])
 {
@@ -48,7 +48,7 @@ int main(int argc, char *argv[])
         addr_size = sizeof their_addr;
         new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size);
         
-        char buff[4096];
+        char buff[8192];
         int buf_len = 0;
 
         while (true)
