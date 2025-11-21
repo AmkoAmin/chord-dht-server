@@ -8,4 +8,4 @@
 - [x] **Aufgabe 2.4** – erledigt  
 - [x] **Aufgabe 2.5** – erledigt  
 - [x] **Aufgabe 2.6** – erledigt  
-- [ ] **Aufgabe 2.7**
+- [x] **Aufgabe 2.7**
