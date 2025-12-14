@@ -7,5 +7,4 @@ k = int(input("Welche Node? "))
 mod = 2 ** m   # int
 
 for i in range(m):
-    print(i)
-    print((k + 2 ** i) % mod)
+    print(f"{i}: {(k + 2 ** i) % mod}")
