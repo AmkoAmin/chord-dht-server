@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200112L
 #include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
@@ -287,6 +288,35 @@ static int setup_server_socket(struct sockaddr_in addr) {
     return sock;
 }
 
+static int setup_udp_socket(struct sockaddr_in addr) {
+    const int enable = 1;
+
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock == -1) {
+        perror("socket udp");
+        exit(EXIT_FAILURE);
+    }
+
+    if (fcntl(sock, F_SETFL, O_NONBLOCK) == -1) {
+        perror("fcntl udp");
+        exit(EXIT_FAILURE);
+    }
+
+    if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) == -1) {
+        perror("setsockopt udp");
+        exit(EXIT_FAILURE);
+    }
+
+    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
+        perror("bind udp");
+        close(sock);
+        exit(EXIT_FAILURE);
+    }
+
+    return sock; // KEIN listen() bei UDP
+}
+
+
 /**
  *  The program expects 3; otherwise, it returns EXIT_FAILURE.
  *
@@ -303,6 +333,7 @@ int main(int argc, char **argv) {
 
     // Set up a server socket.
     int server_socket = setup_server_socket(addr);
+    int udp_socket = setup_udp_socket(addr);
 
     // Create an array of pollfd structures to monitor sockets.
     struct pollfd sockets[2] = {
@@ -327,7 +358,6 @@ int main(int argc, char **argv) {
                 continue;
             }
             int s = sockets[i].fd;
-
             if (s == server_socket) {
 
                 // If the event is on the server_socket, accept a new connection
