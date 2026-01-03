@@ -20,6 +20,18 @@
 
 #define MAX_RESOURCES 100
 
+// Chord peer information
+struct chord_peer {
+    uint16_t id;
+    char ip[INET_ADDRSTRLEN];
+    uint16_t port;
+};
+
+// Global Chord state (set in main())
+static uint16_t self_id = 0;
+static struct chord_peer successor = {0};
+static struct chord_peer predecessor = {0};
+
 struct tuple resources[MAX_RESOURCES] = {
     {"/static/foo", "Foo", sizeof "Foo" - 1},
     {"/static/bar", "Bar", sizeof "Bar" - 1},
@@ -89,6 +101,60 @@ void send_reply(int conn, struct request *request) {
 }
 
 /**
+ * Checks if this node is responsible for the given hash value in the Chord ring.
+ * A node is responsible if: hash > predecessor_id AND hash <= self_id
+ *
+ * @param hash The hash value to check
+ * @param self_id The ID of this node
+ * @param pred_id The ID of the predecessor node
+ *
+ * @return true if this node is responsible, false otherwise
+ */
+static bool is_responsible(uint16_t hash, uint16_t self_id, uint16_t pred_id) {
+    /* Handle wrap-around in the identifier space.
+     * Normal case (no wrap): pred_id < self_id
+     *   responsible if (pred_id, self_id]
+     * Wrap case (pred_id >= self_id): interval wraps around 0
+     *   responsible if (pred_id, 0xFFFF] U [0x0000, self_id]
+     */
+    if (pred_id < self_id) {
+        return (hash > pred_id && hash <= self_id);
+    } else {
+        return (hash > pred_id || hash <= self_id);
+    }
+}
+
+/**
+ * Sends an HTTP 303 redirect response to redirect the request to the successor.
+ *
+ * @param conn The socket descriptor of the client connection
+ * @param uri The resource URI to redirect to
+ */
+static void send_redirect(int conn, const char *uri) {
+    char reply[HTTP_MAX_SIZE];
+    size_t offset = 0;
+
+    // Build Location header with successor's address
+    offset = snprintf(reply, sizeof(reply),
+                     "HTTP/1.1 303 See Other\r\n"
+                     "Location: http://%s:%u%s\r\n"
+                     "Content-Length: 0\r\n"
+                     "\r\n",
+                     successor.ip, successor.port, uri);
+
+    if (offset >= sizeof(reply)) {
+        fprintf(stderr, "Redirect URL too long, truncated\n");
+        offset = sizeof(reply) - 1;
+    }
+
+    if (send(conn, reply, offset, 0) == -1) {
+        perror("send redirect");
+    }
+
+    fprintf(stderr, "Sent redirect to %s:%u%s\n", successor.ip, successor.port, uri);
+}
+
+/**
  * Processes an incoming packet from the client.
  *
  * @param conn The socket descriptor representing the connection to the client.
@@ -106,10 +172,23 @@ ssize_t process_packet(int conn, char *buffer, size_t n) {
         .method = NULL, .uri = NULL, .payload = NULL, .payload_length = -1};
     ssize_t bytes_processed = parse_request(buffer, n, &request);
 
-
+    // Hash the URI to determine which peer owns this resource
+    uint16_t uri_hash = 0;
+    if (bytes_processed > 0 && request.uri) {
+        uri_hash = pseudo_hash((const unsigned char *)request.uri, strlen(request.uri));
+    }
     
     if (bytes_processed > 0) {
-        send_reply(conn, &request);
+        // Check if this node is responsible for this hash
+        if (!is_responsible(uri_hash, self_id, predecessor.id)) {
+            // This node is not responsible, send redirect to successor
+            fprintf(stderr, "Not responsible for hash %u (self=%u, pred=%u), redirecting to successor\n",
+                    uri_hash, self_id, predecessor.id);
+            send_redirect(conn, request.uri);
+        } else {
+            // This node is responsible, process the request
+            send_reply(conn, &request);
+        }
 
         // Check the "Connection" header in the request to determine if the
         // connection should be kept alive or closed.
@@ -363,16 +442,58 @@ static int setup_udp_socket(struct sockaddr_in addr) {
 
 
 /**
- *  The program expects 3; otherwise, it returns EXIT_FAILURE.
+ *  The program expects 4 arguments: self.ip, self.port, and self.id.
+ *  If self.id is empty or not provided, defaults to 0.
+ *  Reads predecessor and successor information from environment variables:
+ *  - PRED_ID, PRED_IP, PRED_PORT (predecessor)
+ *  - SUCC_ID, SUCC_IP, SUCC_PORT (successor)
  *
  *  Call as:
  *
- *  ./build/webserver self.ip self.port
+ *  ./build/webserver self.ip self.port [self.id]
  */
 int main(int argc, char **argv) {
-    //if (argc != 3) {
-    //    return EXIT_FAILURE;
-    //}
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <self.ip> <self.port> [self.id]\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+    
+    // Parse self node ID from argv[3], default to 0 if not provided or empty
+    // Store in global variable for use in process_packet()
+    if (argc > 3 && argv[3] && strlen(argv[3]) > 0) {
+        char *endptr;
+        self_id = safe_strtoul(argv[3], &endptr, 10, "Invalid self.id");
+    }
+    
+    // Read predecessor information from environment variables
+    const char *pred_id_str = getenv("PRED_ID");
+    const char *pred_ip = getenv("PRED_IP");
+    const char *pred_port_str = getenv("PRED_PORT");
+    
+    if (pred_id_str && pred_ip && pred_port_str) {
+        char *endptr;
+        predecessor.id = safe_strtoul(pred_id_str, &endptr, 10, "Invalid PRED_ID");
+        strncpy(predecessor.ip, pred_ip, INET_ADDRSTRLEN - 1);
+        predecessor.port = safe_strtoul(pred_port_str, &endptr, 10, "Invalid PRED_PORT");
+        fprintf(stderr, "[Chord] Predecessor: id=%u, ip=%s, port=%u\n",
+                predecessor.id, predecessor.ip, predecessor.port);
+    }
+    
+    // Read successor information from environment variables
+    const char *succ_id_str = getenv("SUCC_ID");
+    const char *succ_ip = getenv("SUCC_IP");
+    const char *succ_port_str = getenv("SUCC_PORT");
+    
+    if (succ_id_str && succ_ip && succ_port_str) {
+        char *endptr;
+        successor.id = safe_strtoul(succ_id_str, &endptr, 10, "Invalid SUCC_ID");
+        strncpy(successor.ip, succ_ip, INET_ADDRSTRLEN - 1);
+        successor.port = safe_strtoul(succ_port_str, &endptr, 10, "Invalid SUCC_PORT");
+        fprintf(stderr, "[Chord] Successor: id=%u, ip=%s, port=%u\n",
+                successor.id, successor.ip, successor.port);
+    }
+    
+    fprintf(stderr, "[Chord] Self node ID: %u\n", self_id);
     
     struct sockaddr_in addr = derive_sockaddr(argv[1], argv[2]);
 
