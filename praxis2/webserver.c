@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <stdlib.h>
 
 #include "data.h"
 #include "http.h"
@@ -105,6 +106,8 @@ ssize_t process_packet(int conn, char *buffer, size_t n) {
         .method = NULL, .uri = NULL, .payload = NULL, .payload_length = -1};
     ssize_t bytes_processed = parse_request(buffer, n, &request);
 
+
+    
     if (bytes_processed > 0) {
         send_reply(conn, &request);
 
@@ -163,6 +166,48 @@ char *buffer_discard(char *buffer, size_t discard, size_t keep) {
     memmove(buffer, buffer + discard, keep);
     memset(buffer + keep, 0, discard); // invalidate buffer
     return buffer + keep;
+}
+
+/**
+ * Handles incoming UDP datagrams in a non-blocking loop.
+ * Reads all pending UDP packets, logs them with debug info, and handles errors gracefully.
+ *
+ * @param udp_sock The UDP socket file descriptor (must be non-blocking).
+ */
+static void handle_udp_socket(int udp_sock) {
+    // Buffer size for UDP datagram (HTTP_MAX_SIZE is a reasonable upper bound)
+    char buffer[HTTP_MAX_SIZE];
+    struct sockaddr_in sender;
+    socklen_t sender_len = sizeof(sender);
+
+    while (1) {
+        // Receive datagram from any sender
+        ssize_t bytes = recvfrom(udp_sock, buffer, sizeof(buffer) - 1, 0,
+                                 (struct sockaddr *)&sender, &sender_len);
+
+        if (bytes == -1) {
+            // Non-blocking socket returns EAGAIN/EWOULDBLOCK when no data
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Normal case: no more data to read
+                break;
+            } else {
+                // Unexpected error, but don't kill the server
+                perror("recvfrom");
+                break;
+            }
+        } else if (bytes == 0) {
+            // Shouldn't happen with UDP (no graceful close), but handle it
+            break;
+        } else {
+            // Successfully received a datagram
+            char sender_ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &sender.sin_addr, sender_ip, sizeof(sender_ip));
+            uint16_t sender_port = ntohs(sender.sin_port);
+
+            fprintf(stderr, "[UDP] Received %zd bytes from %s:%u\n",
+                    bytes, sender_ip, sender_port);
+        }
+    }
 }
 
 /**
@@ -325,19 +370,24 @@ static int setup_udp_socket(struct sockaddr_in addr) {
  *  ./build/webserver self.ip self.port
  */
 int main(int argc, char **argv) {
-    if (argc != 3) {
-        return EXIT_FAILURE;
-    }
-
+    //if (argc != 3) {
+    //    return EXIT_FAILURE;
+    //}
+    
     struct sockaddr_in addr = derive_sockaddr(argv[1], argv[2]);
 
     // Set up a server socket.
     int server_socket = setup_server_socket(addr);
     int udp_socket = setup_udp_socket(addr);
 
-    // Create an array of pollfd structures to monitor sockets.
-    struct pollfd sockets[2] = {
-        {.fd = server_socket, .events = POLLIN},
+    // Create an array of pollfd structures to monitor sockets:
+    // [0] = server_socket (TCP accept)
+    // [1] = udp_socket (UDP datagram receive) - always active
+    // [2] = active TCP connection (when connected)
+    struct pollfd sockets[3] = {
+        {.fd = server_socket, .events = POLLIN, .revents = 0},
+        {.fd = udp_socket, .events = POLLIN, .revents = 0},
+        {.fd = -1, .events = 0, .revents = 0},  // TCP connection (inactive initially)
     };
 
     struct connection_state state = {0};
@@ -352,14 +402,14 @@ int main(int argc, char **argv) {
 
         // Process events on the monitored sockets.
         for (size_t i = 0; i < sizeof(sockets) / sizeof(sockets[0]); i += 1) {
-            if (sockets[i].revents != POLLIN) {
-                // If there are no POLLIN events on the socket, continue to the
-                // next iteration.
+            if (sockets[i].revents == 0 || sockets[i].fd == -1) {
+                // If there are no events on the socket or socket is inactive, continue
                 continue;
             }
-            int s = sockets[i].fd;
-            if (s == server_socket) {
 
+            int s = sockets[i].fd;
+
+            if (s == server_socket) {
                 // If the event is on the server_socket, accept a new connection
                 // from a client.
                 int connection = accept(server_socket, NULL, NULL);
@@ -368,24 +418,32 @@ int main(int argc, char **argv) {
                     close(server_socket);
                     perror("accept");
                     exit(EXIT_FAILURE);
-                } else {
+                } else if (connection != -1) {
                     connection_setup(&state, connection);
 
-                    // limit to one connection at a time
+                    // Limit to one TCP connection at a time
+                    // Disable accepting new connections while one is active
                     sockets[0].events = 0;
-                    sockets[1].fd = connection;
-                    sockets[1].events = POLLIN;
+                    // Enable the TCP connection socket in slot [2]
+                    sockets[2].fd = connection;
+                    sockets[2].events = POLLIN;
                 }
+            } else if (s == udp_socket) {
+                // Handle all pending UDP datagrams
+                handle_udp_socket(udp_socket);
             } else {
+                // Must be the TCP connection socket
                 assert(s == state.sock);
 
                 // Call the 'handle_connection' function to process the incoming
                 // data on the socket.
                 bool cont = handle_connection(&state);
-                if (!cont) { // get ready for a new connection
-                    sockets[0].events = POLLIN;
-                    sockets[1].fd = -1;
-                    sockets[1].events = 0;
+                if (!cont) {
+                    // Connection closed, get ready for a new connection
+                    close(state.sock);
+                    sockets[0].events = POLLIN;   // Re-enable TCP accept
+                    sockets[2].fd = -1;            // Disable TCP connection slot
+                    sockets[2].events = 0;
                 }
             }
         }
