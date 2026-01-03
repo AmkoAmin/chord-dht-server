@@ -12,12 +12,25 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <stdlib.h>
 
 #include "data.h"
 #include "http.h"
 #include "util.h"
 
 #define MAX_RESOURCES 100
+
+// Chord peer information
+struct chord_peer {
+    uint16_t id;
+    char ip[INET_ADDRSTRLEN];
+    uint16_t port;
+};
+
+// Global Chord state (set in main())
+static uint16_t self_id = 0;
+static struct chord_peer successor = {0};
+static struct chord_peer predecessor = {0};
 
 struct tuple resources[MAX_RESOURCES] = {
     {"/static/foo", "Foo", sizeof "Foo" - 1},
@@ -88,6 +101,60 @@ void send_reply(int conn, struct request *request) {
 }
 
 /**
+ * Checks if this node is responsible for the given hash value in the Chord ring.
+ * A node is responsible if: hash > predecessor_id AND hash <= self_id
+ *
+ * @param hash The hash value to check
+ * @param self_id The ID of this node
+ * @param pred_id The ID of the predecessor node
+ *
+ * @return true if this node is responsible, false otherwise
+ */
+static bool is_responsible(uint16_t hash, uint16_t self_id, uint16_t pred_id) {
+    /* Handle wrap-around in the identifier space.
+     * Normal case (no wrap): pred_id < self_id
+     *   responsible if (pred_id, self_id]
+     * Wrap case (pred_id >= self_id): interval wraps around 0
+     *   responsible if (pred_id, 0xFFFF] U [0x0000, self_id]
+     */
+    if (pred_id < self_id) {
+        return (hash > pred_id && hash <= self_id);
+    } else {
+        return (hash > pred_id || hash <= self_id);
+    }
+}
+
+/**
+ * Sends an HTTP 303 redirect response to redirect the request to the successor.
+ *
+ * @param conn The socket descriptor of the client connection
+ * @param uri The resource URI to redirect to
+ */
+static void send_redirect(int conn, const char *uri) {
+    char reply[HTTP_MAX_SIZE];
+    size_t offset = 0;
+
+    // Build Location header with successor's address
+    offset = snprintf(reply, sizeof(reply),
+                     "HTTP/1.1 303 See Other\r\n"
+                     "Location: http://%s:%u%s\r\n"
+                     "Content-Length: 0\r\n"
+                     "\r\n",
+                     successor.ip, successor.port, uri);
+
+    if (offset >= sizeof(reply)) {
+        fprintf(stderr, "Redirect URL too long, truncated\n");
+        offset = sizeof(reply) - 1;
+    }
+
+    if (send(conn, reply, offset, 0) == -1) {
+        perror("send redirect");
+    }
+
+    fprintf(stderr, "Sent redirect to %s:%u%s\n", successor.ip, successor.port, uri);
+}
+
+/**
  * Processes an incoming packet from the client.
  *
  * @param conn The socket descriptor representing the connection to the client.
@@ -105,8 +172,23 @@ ssize_t process_packet(int conn, char *buffer, size_t n) {
         .method = NULL, .uri = NULL, .payload = NULL, .payload_length = -1};
     ssize_t bytes_processed = parse_request(buffer, n, &request);
 
+    // Hash the URI to determine which peer owns this resource
+    uint16_t uri_hash = 0;
+    if (bytes_processed > 0 && request.uri) {
+        uri_hash = pseudo_hash((const unsigned char *)request.uri, strlen(request.uri));
+    }
+    
     if (bytes_processed > 0) {
-        send_reply(conn, &request);
+        // Check if this node is responsible for this hash
+        if (!is_responsible(uri_hash, self_id, predecessor.id)) {
+            // This node is not responsible, send redirect to successor
+            fprintf(stderr, "Not responsible for hash %u (self=%u, pred=%u), redirecting to successor\n",
+                    uri_hash, self_id, predecessor.id);
+            send_redirect(conn, request.uri);
+        } else {
+            // This node is responsible, process the request
+            send_reply(conn, &request);
+        }
 
         // Check the "Connection" header in the request to determine if the
         // connection should be kept alive or closed.
@@ -163,6 +245,48 @@ char *buffer_discard(char *buffer, size_t discard, size_t keep) {
     memmove(buffer, buffer + discard, keep);
     memset(buffer + keep, 0, discard); // invalidate buffer
     return buffer + keep;
+}
+
+/**
+ * Handles incoming UDP datagrams in a non-blocking loop.
+ * Reads all pending UDP packets, logs them with debug info, and handles errors gracefully.
+ *
+ * @param udp_sock The UDP socket file descriptor (must be non-blocking).
+ */
+static void handle_udp_socket(int udp_sock) {
+    // Buffer size for UDP datagram (HTTP_MAX_SIZE is a reasonable upper bound)
+    char buffer[HTTP_MAX_SIZE];
+    struct sockaddr_in sender;
+    socklen_t sender_len = sizeof(sender);
+
+    while (1) {
+        // Receive datagram from any sender
+        ssize_t bytes = recvfrom(udp_sock, buffer, sizeof(buffer) - 1, 0,
+                                 (struct sockaddr *)&sender, &sender_len);
+
+        if (bytes == -1) {
+            // Non-blocking socket returns EAGAIN/EWOULDBLOCK when no data
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Normal case: no more data to read
+                break;
+            } else {
+                // Unexpected error, but don't kill the server
+                perror("recvfrom");
+                break;
+            }
+        } else if (bytes == 0) {
+            // Shouldn't happen with UDP (no graceful close), but handle it
+            break;
+        } else {
+            // Successfully received a datagram
+            char sender_ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &sender.sin_addr, sender_ip, sizeof(sender_ip));
+            uint16_t sender_port = ntohs(sender.sin_port);
+
+            fprintf(stderr, "[UDP] Received %zd bytes from %s:%u\n",
+                    bytes, sender_ip, sender_port);
+        }
+    }
 }
 
 /**
@@ -318,26 +442,73 @@ static int setup_udp_socket(struct sockaddr_in addr) {
 
 
 /**
- *  The program expects 3; otherwise, it returns EXIT_FAILURE.
+ *  The program expects 4 arguments: self.ip, self.port, and self.id.
+ *  If self.id is empty or not provided, defaults to 0.
+ *  Reads predecessor and successor information from environment variables:
+ *  - PRED_ID, PRED_IP, PRED_PORT (predecessor)
+ *  - SUCC_ID, SUCC_IP, SUCC_PORT (successor)
  *
  *  Call as:
  *
- *  ./build/webserver self.ip self.port
+ *  ./build/webserver self.ip self.port [self.id]
  */
 int main(int argc, char **argv) {
-    if (argc != 3) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s <self.ip> <self.port> [self.id]\n", argv[0]);
         return EXIT_FAILURE;
     }
-
+    
+    // Parse self node ID from argv[3], default to 0 if not provided or empty
+    // Store in global variable for use in process_packet()
+    if (argc > 3 && argv[3] && strlen(argv[3]) > 0) {
+        char *endptr;
+        self_id = safe_strtoul(argv[3], &endptr, 10, "Invalid self.id");
+    }
+    
+    // Read predecessor information from environment variables
+    const char *pred_id_str = getenv("PRED_ID");
+    const char *pred_ip = getenv("PRED_IP");
+    const char *pred_port_str = getenv("PRED_PORT");
+    
+    if (pred_id_str && pred_ip && pred_port_str) {
+        char *endptr;
+        predecessor.id = safe_strtoul(pred_id_str, &endptr, 10, "Invalid PRED_ID");
+        strncpy(predecessor.ip, pred_ip, INET_ADDRSTRLEN - 1);
+        predecessor.port = safe_strtoul(pred_port_str, &endptr, 10, "Invalid PRED_PORT");
+        fprintf(stderr, "[Chord] Predecessor: id=%u, ip=%s, port=%u\n",
+                predecessor.id, predecessor.ip, predecessor.port);
+    }
+    
+    // Read successor information from environment variables
+    const char *succ_id_str = getenv("SUCC_ID");
+    const char *succ_ip = getenv("SUCC_IP");
+    const char *succ_port_str = getenv("SUCC_PORT");
+    
+    if (succ_id_str && succ_ip && succ_port_str) {
+        char *endptr;
+        successor.id = safe_strtoul(succ_id_str, &endptr, 10, "Invalid SUCC_ID");
+        strncpy(successor.ip, succ_ip, INET_ADDRSTRLEN - 1);
+        successor.port = safe_strtoul(succ_port_str, &endptr, 10, "Invalid SUCC_PORT");
+        fprintf(stderr, "[Chord] Successor: id=%u, ip=%s, port=%u\n",
+                successor.id, successor.ip, successor.port);
+    }
+    
+    fprintf(stderr, "[Chord] Self node ID: %u\n", self_id);
+    
     struct sockaddr_in addr = derive_sockaddr(argv[1], argv[2]);
 
     // Set up a server socket.
     int server_socket = setup_server_socket(addr);
     int udp_socket = setup_udp_socket(addr);
 
-    // Create an array of pollfd structures to monitor sockets.
-    struct pollfd sockets[2] = {
-        {.fd = server_socket, .events = POLLIN},
+    // Create an array of pollfd structures to monitor sockets:
+    // [0] = server_socket (TCP accept)
+    // [1] = udp_socket (UDP datagram receive) - always active
+    // [2] = active TCP connection (when connected)
+    struct pollfd sockets[3] = {
+        {.fd = server_socket, .events = POLLIN, .revents = 0},
+        {.fd = udp_socket, .events = POLLIN, .revents = 0},
+        {.fd = -1, .events = 0, .revents = 0},  // TCP connection (inactive initially)
     };
 
     struct connection_state state = {0};
@@ -352,14 +523,14 @@ int main(int argc, char **argv) {
 
         // Process events on the monitored sockets.
         for (size_t i = 0; i < sizeof(sockets) / sizeof(sockets[0]); i += 1) {
-            if (sockets[i].revents != POLLIN) {
-                // If there are no POLLIN events on the socket, continue to the
-                // next iteration.
+            if (sockets[i].revents == 0 || sockets[i].fd == -1) {
+                // If there are no events on the socket or socket is inactive, continue
                 continue;
             }
-            int s = sockets[i].fd;
-            if (s == server_socket) {
 
+            int s = sockets[i].fd;
+
+            if (s == server_socket) {
                 // If the event is on the server_socket, accept a new connection
                 // from a client.
                 int connection = accept(server_socket, NULL, NULL);
@@ -368,24 +539,32 @@ int main(int argc, char **argv) {
                     close(server_socket);
                     perror("accept");
                     exit(EXIT_FAILURE);
-                } else {
+                } else if (connection != -1) {
                     connection_setup(&state, connection);
 
-                    // limit to one connection at a time
+                    // Limit to one TCP connection at a time
+                    // Disable accepting new connections while one is active
                     sockets[0].events = 0;
-                    sockets[1].fd = connection;
-                    sockets[1].events = POLLIN;
+                    // Enable the TCP connection socket in slot [2]
+                    sockets[2].fd = connection;
+                    sockets[2].events = POLLIN;
                 }
+            } else if (s == udp_socket) {
+                // Handle all pending UDP datagrams
+                handle_udp_socket(udp_socket);
             } else {
+                // Must be the TCP connection socket
                 assert(s == state.sock);
 
                 // Call the 'handle_connection' function to process the incoming
                 // data on the socket.
                 bool cont = handle_connection(&state);
-                if (!cont) { // get ready for a new connection
-                    sockets[0].events = POLLIN;
-                    sockets[1].fd = -1;
-                    sockets[1].events = 0;
+                if (!cont) {
+                    // Connection closed, get ready for a new connection
+                    close(state.sock);
+                    sockets[0].events = POLLIN;   // Re-enable TCP accept
+                    sockets[2].fd = -1;            // Disable TCP connection slot
+                    sockets[2].events = 0;
                 }
             }
         }
