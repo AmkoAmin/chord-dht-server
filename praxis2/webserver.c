@@ -31,6 +31,9 @@ struct chord_peer {
 static uint16_t self_id = 0;
 static struct chord_peer successor = {0};
 static struct chord_peer predecessor = {0};
+// Store self network identity for UDP lookup replies
+static char self_ip[INET_ADDRSTRLEN] = {0};
+static uint16_t self_port = 0;
 
 struct tuple resources[MAX_RESOURCES] = {
     {"/static/foo", "Foo", sizeof "Foo" - 1},
@@ -177,14 +180,84 @@ ssize_t process_packet(int conn, char *buffer, size_t n) {
     if (bytes_processed > 0 && request.uri) {
         uri_hash = pseudo_hash((const unsigned char *)request.uri, strlen(request.uri));
     }
-    
+
     if (bytes_processed > 0) {
-        // Check if this node is responsible for this hash
-        if (!is_responsible(uri_hash, self_id, predecessor.id)) {
-            // This node is not responsible, send redirect to successor
-            fprintf(stderr, "Not responsible for hash %u (self=%u, pred=%u), redirecting to successor\n",
-                    uri_hash, self_id, predecessor.id);
-            send_redirect(conn, request.uri);
+        // Determine ring size cases
+        bool single_node = false;
+        if ((predecessor.id == self_id && successor.id == self_id) ||
+            (predecessor.id == 0 && successor.id == 0)) {
+            single_node = true;
+        }
+
+        bool responsible = false;
+        if (single_node) {
+            // Single-node ring: always responsible for all keys
+            responsible = true;
+        } else {
+            responsible = is_responsible(uri_hash, self_id, predecessor.id);
+        }
+
+        if (!responsible) {
+            // Not responsible: decide behavior depending on ring size
+            if (successor.id == predecessor.id) {
+                // Two-node ring: redirect to successor (no UDP lookup)
+                fprintf(stderr, "Two-node ring, not responsible for hash %u (self=%u, pred=%u), redirecting to successor\n",
+                        uri_hash, self_id, predecessor.id);
+                send_redirect(conn, request.uri);
+            } else {
+                // Ring with >2 nodes: reply 503 + send UDP lookup to successor
+                fprintf(stderr, ">2-node ring, not responsible for hash %u, sending 503 and UDP lookup\n",
+                        uri_hash);
+                // Send 503 Service Unavailable with Retry-After: 1
+                char reply[HTTP_MAX_SIZE];
+                size_t off = snprintf(reply, sizeof(reply),
+                                      "HTTP/1.1 503 Service Unavailable\r\n"
+                                      "Retry-After: 1\r\n"
+                                      "Content-Length: 0\r\n"
+                                      "\r\n");
+                if (off >= sizeof(reply)) off = sizeof(reply) - 1;
+                if (send(conn, reply, off, 0) == -1) {
+                    perror("send 503");
+                }
+
+                // Send UDP lookup to successor
+                // Message format: flags(1), id(2), peer.id(2), peer.ip(4), peer.port(2)
+                int sock = socket(AF_INET, SOCK_DGRAM, 0);
+                if (sock == -1) {
+                    perror("socket udp lookup");
+                } else {
+                    struct sockaddr_in succ_addr = {0};
+                    succ_addr.sin_family = AF_INET;
+                    succ_addr.sin_port = htons(successor.port);
+                    if (inet_pton(AF_INET, successor.ip, &succ_addr.sin_addr) != 1) {
+                        fprintf(stderr, "Invalid successor IP %s\n", successor.ip);
+                    } else {
+                        unsigned char msg[11];
+                        // flags = LOOKUP (0)
+                        msg[0] = 0;
+                        // id (hash)
+                        uint16_t net_id = htons(uri_hash);
+                        memcpy(&msg[1], &net_id, 2);
+                        // peer.id = self_id
+                        uint16_t net_peer_id = htons(self_id);
+                        memcpy(&msg[3], &net_peer_id, 2);
+                        // peer.ip = self_ip
+                        unsigned char ipbuf[4] = {0};
+                        if (inet_pton(AF_INET, self_ip, ipbuf) != 1) {
+                            fprintf(stderr, "Invalid self IP %s\n", self_ip);
+                        }
+                        memcpy(&msg[5], ipbuf, 4);
+                        // peer.port
+                        uint16_t net_peer_port = htons(self_port);
+                        memcpy(&msg[9], &net_peer_port, 2);
+
+                        ssize_t sent = sendto(sock, msg, sizeof(msg), 0,
+                                              (struct sockaddr *)&succ_addr, sizeof(succ_addr));
+                        if (sent == -1) perror("sendto lookup");
+                    }
+                    close(sock);
+                }
+            }
         } else {
             // This node is responsible, process the request
             send_reply(conn, &request);
@@ -464,6 +537,10 @@ int main(int argc, char **argv) {
         char *endptr;
         self_id = safe_strtoul(argv[3], &endptr, 10, "Invalid self.id");
     }
+    // Store self IP/port for UDP lookup messages
+    strncpy(self_ip, argv[1], INET_ADDRSTRLEN - 1);
+    char *endptr;
+    self_port = safe_strtoul(argv[2], &endptr, 10, "Invalid self.port");
     
     // Read predecessor information from environment variables
     const char *pred_id_str = getenv("PRED_ID");
