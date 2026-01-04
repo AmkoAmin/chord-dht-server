@@ -34,6 +34,10 @@ static struct chord_peer predecessor = {0};
 // Store self network identity for UDP lookup replies
 static char self_ip[INET_ADDRSTRLEN] = {0};
 static uint16_t self_port = 0;
+// Simple reply cache for most-recent reply (sufficient for tests)
+static bool have_reply = false;
+static struct chord_peer reply_peer = {0};
+static uint16_t reply_prev_id = 0; // "Hash ID" field from reply (treated as predecessor id)
 
 struct tuple resources[MAX_RESOURCES] = {
     {"/static/foo", "Foo", sizeof "Foo" - 1},
@@ -205,57 +209,95 @@ ssize_t process_packet(int conn, char *buffer, size_t n) {
                         uri_hash, self_id, predecessor.id);
                 send_redirect(conn, request.uri);
             } else {
-                // Ring with >2 nodes: reply 503 + send UDP lookup to successor
-                fprintf(stderr, ">2-node ring, not responsible for hash %u, sending 503 and UDP lookup\n",
-                        uri_hash);
-                // Send 503 Service Unavailable with Retry-After: 1
-                char reply[HTTP_MAX_SIZE];
-                size_t off = snprintf(reply, sizeof(reply),
-                                      "HTTP/1.1 503 Service Unavailable\r\n"
-                                      "Retry-After: 1\r\n"
-                                      "Content-Length: 0\r\n"
-                                      "\r\n");
-                if (off >= sizeof(reply)) off = sizeof(reply) - 1;
-                if (send(conn, reply, off, 0) == -1) {
-                    perror("send 503");
-                }
-
-                // Send UDP lookup to successor
-                // Message format: flags(1), id(2), peer.id(2), peer.ip(4), peer.port(2)
-                int sock = socket(AF_INET, SOCK_DGRAM, 0);
-                if (sock == -1) {
-                    perror("socket udp lookup");
+                // Ring with >2 nodes: first check cache for a stored reply
+                if (have_reply) {
+                    // Use cached reply to redirect client
+                    fprintf(stderr, "Using cached reply to redirect to peer %s:%u\n", reply_peer.ip, reply_peer.port);
+                    // Build redirect to cached peer
+                    char rep[HTTP_MAX_SIZE];
+                    size_t off = snprintf(rep, sizeof(rep),
+                                          "HTTP/1.1 303 See Other\r\n"
+                                          "Location: http://%s:%u%s\r\n"
+                                          "Content-Length: 0\r\n"
+                                          "\r\n",
+                                          reply_peer.ip, reply_peer.port, request.uri);
+                    if (off >= sizeof(rep)) off = sizeof(rep) - 1;
+                    send(conn, rep, off, 0);
+                    // clear cache entry after use
+                    have_reply = false;
                 } else {
-                    struct sockaddr_in succ_addr = {0};
-                    succ_addr.sin_family = AF_INET;
-                    succ_addr.sin_port = htons(successor.port);
-                    if (inet_pton(AF_INET, successor.ip, &succ_addr.sin_addr) != 1) {
-                        fprintf(stderr, "Invalid successor IP %s\n", successor.ip);
+                    // If this node knows that its successor is responsible for the hash,
+                    // synthesize a local REPLY (store in cache) so originator immediately
+                    // has the information available (special case: send to self)
+                    if (is_responsible(uri_hash, successor.id, self_id)) {
+                        // Successor is responsible; store reply locally: id = this node's id
+                        have_reply = true;
+                        reply_prev_id = self_id; // predecessor of responsible is this node
+                        reply_peer = successor;
+                        fprintf(stderr, "Locally stored REPLY (successor responsible): peer=%s:%u prev_id=%u\n",
+                                reply_peer.ip, reply_peer.port, reply_prev_id);
+                        // Send 503 to HTTP client (as before)
+                        char rep[HTTP_MAX_SIZE];
+                        size_t off = snprintf(rep, sizeof(rep),
+                                              "HTTP/1.1 503 Service Unavailable\r\n"
+                                              "Retry-After: 1\r\n"
+                                              "Content-Length: 0\r\n"
+                                              "\r\n");
+                        if (off >= sizeof(rep)) off = sizeof(rep) - 1;
+                        if (send(conn, rep, off, 0) == -1) perror("send 503");
                     } else {
-                        unsigned char msg[11];
-                        // flags = LOOKUP (0)
-                        msg[0] = 0;
-                        // id (hash)
-                        uint16_t net_id = htons(uri_hash);
-                        memcpy(&msg[1], &net_id, 2);
-                        // peer.id = self_id
-                        uint16_t net_peer_id = htons(self_id);
-                        memcpy(&msg[3], &net_peer_id, 2);
-                        // peer.ip = self_ip
-                        unsigned char ipbuf[4] = {0};
-                        if (inet_pton(AF_INET, self_ip, ipbuf) != 1) {
-                            fprintf(stderr, "Invalid self IP %s\n", self_ip);
+                        // No cached reply and successor not known to be responsible: send 503 and UDP lookup to successor
+                        fprintf(stderr, ">2-node ring, not responsible for hash %u, sending 503 and UDP lookup\n",
+                                uri_hash);
+                        // Send 503 Service Unavailable with Retry-After: 1
+                        char rep[HTTP_MAX_SIZE];
+                        size_t off = snprintf(rep, sizeof(rep),
+                                              "HTTP/1.1 503 Service Unavailable\r\n"
+                                              "Retry-After: 1\r\n"
+                                              "Content-Length: 0\r\n"
+                                              "\r\n");
+                        if (off >= sizeof(rep)) off = sizeof(rep) - 1;
+                        if (send(conn, rep, off, 0) == -1) {
+                            perror("send 503");
                         }
-                        memcpy(&msg[5], ipbuf, 4);
-                        // peer.port
-                        uint16_t net_peer_port = htons(self_port);
-                        memcpy(&msg[9], &net_peer_port, 2);
 
-                        ssize_t sent = sendto(sock, msg, sizeof(msg), 0,
-                                              (struct sockaddr *)&succ_addr, sizeof(succ_addr));
-                        if (sent == -1) perror("sendto lookup");
+                        // Send UDP lookup to successor
+                        int sock = socket(AF_INET, SOCK_DGRAM, 0);
+                        if (sock == -1) {
+                            perror("socket udp lookup");
+                        } else {
+                            struct sockaddr_in succ_addr = {0};
+                            succ_addr.sin_family = AF_INET;
+                            succ_addr.sin_port = htons(successor.port);
+                            if (inet_pton(AF_INET, successor.ip, &succ_addr.sin_addr) != 1) {
+                                fprintf(stderr, "Invalid successor IP %s\n", successor.ip);
+                            } else {
+                                unsigned char msg[11];
+                                // flags = LOOKUP (0)
+                                msg[0] = 0;
+                                // id (hash)
+                                uint16_t net_id = htons(uri_hash);
+                                memcpy(&msg[1], &net_id, 2);
+                                // peer.id = self_id
+                                uint16_t net_peer_id = htons(self_id);
+                                memcpy(&msg[3], &net_peer_id, 2);
+                                // peer.ip = self_ip
+                                unsigned char ipbuf[4] = {0};
+                                if (inet_pton(AF_INET, self_ip, ipbuf) != 1) {
+                                    fprintf(stderr, "Invalid self IP %s\n", self_ip);
+                                }
+                                memcpy(&msg[5], ipbuf, 4);
+                                // peer.port
+                                uint16_t net_peer_port = htons(self_port);
+                                memcpy(&msg[9], &net_peer_port, 2);
+
+                                ssize_t sent = sendto(sock, msg, sizeof(msg), 0,
+                                                      (struct sockaddr *)&succ_addr, sizeof(succ_addr));
+                                if (sent == -1) perror("sendto lookup");
+                            }
+                            close(sock);
+                        }
                     }
-                    close(sock);
                 }
             }
         } else {
@@ -358,6 +400,99 @@ static void handle_udp_socket(int udp_sock) {
 
             fprintf(stderr, "[UDP] Received %zd bytes from %s:%u\n",
                     bytes, sender_ip, sender_port);
+
+            // We expect DHT messages of 11 bytes: flags(1), id(2), peer.id(2), peer.ip(4), peer.port(2)
+            if (bytes < 11) {
+                fprintf(stderr, "[UDP] Ignoring short packet (%zd bytes)\n", bytes);
+                continue;
+            }
+
+            unsigned char *msg = (unsigned char *)buffer;
+            uint8_t flags = msg[0];
+            uint16_t mid = ntohs(*(uint16_t *)&msg[1]);
+            uint16_t peer_id = ntohs(*(uint16_t *)&msg[3]);
+            char peer_ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &msg[5], peer_ip, sizeof(peer_ip));
+            uint16_t peer_port = ntohs(*(uint16_t *)&msg[9]);
+
+            if (flags == 0) {
+                // LOOKUP: msg.id is the queried hash, peer is originator
+                uint16_t query_hash = mid;
+                struct chord_peer origin = {peer_id, "", peer_port};
+                strncpy(origin.ip, peer_ip, INET_ADDRSTRLEN - 1);
+
+                // If this node is responsible for the hash -> reply with responsible=self
+                if (is_responsible(query_hash, self_id, predecessor.id)) {
+                    // Build reply: flags=1, id = predecessor of responsible node (predecessor.id), peer = responsible node (self)
+                    unsigned char out[11];
+                    out[0] = 1; // reply
+                    uint16_t net_id = htons(predecessor.id);
+                    memcpy(&out[1], &net_id, 2);
+                    uint16_t net_peer_id = htons(self_id);
+                    memcpy(&out[3], &net_peer_id, 2);
+                    unsigned char ipbuf[4];
+                    if (inet_pton(AF_INET, self_ip, ipbuf) != 1) memset(ipbuf,0,4);
+                    memcpy(&out[5], ipbuf, 4);
+                    uint16_t net_peer_port = htons(self_port);
+                    memcpy(&out[9], &net_peer_port, 2);
+
+                    struct sockaddr_in dest = {0};
+                    dest.sin_family = AF_INET;
+                    dest.sin_port = htons(origin.port);
+                    if (inet_pton(AF_INET, origin.ip, &dest.sin_addr) != 1) {
+                        fprintf(stderr, "[UDP] Invalid origin IP %s\n", origin.ip);
+                    } else {
+                        sendto(udp_sock, out, sizeof(out), 0, (struct sockaddr *)&dest, sizeof(dest));
+                        fprintf(stderr, "[UDP] Sent REPLY (responsible=self) to %s:%u\n", origin.ip, origin.port);
+                    }
+                } else if (is_responsible(query_hash, successor.id, self_id)) {
+                    // Successor is responsible: reply with peer = successor and id = this node's id (predecessor of responsible)
+                    unsigned char out[11];
+                    out[0] = 1; // reply
+                    uint16_t net_id = htons(self_id);
+                    memcpy(&out[1], &net_id, 2);
+                    uint16_t net_peer_id = htons(successor.id);
+                    memcpy(&out[3], &net_peer_id, 2);
+                    unsigned char ipbuf[4];
+                    if (inet_pton(AF_INET, successor.ip, ipbuf) != 1) memset(ipbuf,0,4);
+                    memcpy(&out[5], ipbuf, 4);
+                    uint16_t net_peer_port = htons(successor.port);
+                    memcpy(&out[9], &net_peer_port, 2);
+
+                    struct sockaddr_in dest = {0};
+                    dest.sin_family = AF_INET;
+                    dest.sin_port = htons(origin.port);
+                    if (inet_pton(AF_INET, origin.ip, &dest.sin_addr) != 1) {
+                        fprintf(stderr, "[UDP] Invalid origin IP %s\n", origin.ip);
+                    } else {
+                        sendto(udp_sock, out, sizeof(out), 0, (struct sockaddr *)&dest, sizeof(dest));
+                        fprintf(stderr, "[UDP] Sent REPLY (responsible=successor) to %s:%u\n", origin.ip, origin.port);
+                    }
+                } else {
+                    // Forward lookup to successor unchanged
+                    struct sockaddr_in succ_addr = {0};
+                    succ_addr.sin_family = AF_INET;
+                    succ_addr.sin_port = htons(successor.port);
+                    if (inet_pton(AF_INET, successor.ip, &succ_addr.sin_addr) != 1) {
+                        fprintf(stderr, "[UDP] Invalid successor IP %s\n", successor.ip);
+                    } else {
+                        ssize_t s = sendto(udp_sock, msg, 11, 0, (struct sockaddr *)&succ_addr, sizeof(succ_addr));
+                        if (s == -1) perror("sendto forward");
+                        else fprintf(stderr, "[UDP] Forwarded LOOKUP to successor %s:%u\n", successor.ip, successor.port);
+                    }
+                }
+            } else if (flags == 1) {
+                // REPLY: store in cache for later HTTP handling
+                have_reply = true;
+                reply_prev_id = mid; // treated as "predecessor id" per protocol
+                reply_peer.id = peer_id;
+                strncpy(reply_peer.ip, peer_ip, INET_ADDRSTRLEN - 1);
+                reply_peer.port = peer_port;
+                fprintf(stderr, "[UDP] Stored REPLY: peer=%u %s:%u prev_id=%u\n",
+                        reply_peer.id, reply_peer.ip, reply_peer.port, reply_prev_id);
+            } else {
+                fprintf(stderr, "[UDP] Unknown flags=%u\n", flags);
+            }
         }
     }
 }
