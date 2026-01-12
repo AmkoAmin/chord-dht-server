@@ -337,7 +337,7 @@ def test_dht(static_peer):
         for i, id_
         in enumerate(dht_ids)
     ]
-
+    
     with contextlib.ExitStack() as contexts:
         for predecessor, peer, successor in _iter_with_neighbors(peers):
             contexts.enter_context(static_peer(
