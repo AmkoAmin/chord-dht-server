@@ -1,0 +1,5 @@
+parse_ports(argc, argv, &n_ports)
+
+setup_sockets(ctx, ports, n, reps, items, &active)
+
+handle_message(sock, msg, len, &should_close) (map/red/rip dispatch)
