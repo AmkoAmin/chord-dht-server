@@ -1,9 +1,12 @@
+// REP worker: bind to provided ports, handle legacy messages and new protocol
 #include <zmq.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <errno.h>
+#include <pthread.h>
 
 #include "wordcount.h"
 
@@ -11,12 +14,8 @@
 #define HEADER_LEN 6
 #define RECV_BUFFER_SIZE 2048
 
-static volatile sig_atomic_t running = 1;
-
-static void handle_sigint(int sig) {
-    (void)sig;
-    running = 0;
-}
+volatile sig_atomic_t running = 1;
+static void handle_sigint(int sig) { (void)sig; running = 0; }
 
 static int is_digit_ascii(char c) {
     return (c >= '0' && c <= '9');
@@ -28,14 +27,9 @@ static size_t parse_msg_len(const char *p) {
     }
     size_t val = (size_t)((p[0] - '0') * 100 + (p[1] - '0') * 10 + (p[2] - '0'));
     if (val == 0 || val > MAX_MSG_LEN) {
-        return MAX_MSG_LEN;
+        return val;
     }
     return val;
-}
-
-static void send_reply(void *socket, const char *reply) {
-    size_t len = (reply != NULL) ? strlen(reply) : 0;
-    zmq_send(socket, reply != NULL ? reply : "", len + 1, 0);
 }
 
 int main(int argc, char **argv) {
@@ -48,13 +42,13 @@ int main(int argc, char **argv) {
     printf("Starting worker on %d port(s)...\n", n_ports);
 
     void *context = zmq_ctx_new();
-    if (context == NULL) {
+    if (!context) {
         fprintf(stderr, "Failed to create ZMQ context\n");
         return 1;
     }
 
-    void **reps = calloc((size_t)n_ports, sizeof(void *));
-    if (reps == NULL) {
+    void **reps = calloc(n_ports, sizeof(void*));
+    if (!reps) {
         fprintf(stderr, "Out of memory\n");
         zmq_ctx_destroy(context);
         return 1;
@@ -62,13 +56,13 @@ int main(int argc, char **argv) {
 
     for (int i = 0; i < n_ports; ++i) {
         reps[i] = zmq_socket(context, ZMQ_REP);
-        if (reps[i] == NULL) {
-            fprintf(stderr, "Failed to create REP socket for port %s\n", argv[i + 1]);
+        if (!reps[i]) {
+            fprintf(stderr, "Failed to create REP socket for port %s\n", argv[i+1]);
             reps[i] = NULL;
             continue;
         }
         char endpoint[128];
-        snprintf(endpoint, sizeof(endpoint), "tcp://*:%s", argv[i + 1]);
+        snprintf(endpoint, sizeof(endpoint), "tcp://*:%s", argv[i+1]);
         if (zmq_bind(reps[i], endpoint) != 0) {
             fprintf(stderr, "Failed to bind to %s: %s\n", endpoint, zmq_strerror(zmq_errno()));
             zmq_close(reps[i]);
@@ -80,14 +74,10 @@ int main(int argc, char **argv) {
 
     signal(SIGINT, handle_sigint);
 
-    zmq_pollitem_t *items = calloc((size_t)n_ports, sizeof(zmq_pollitem_t));
-    if (items == NULL) {
+    zmq_pollitem_t *items = calloc(n_ports, sizeof(zmq_pollitem_t));
+    if (!items) {
         fprintf(stderr, "Out of memory (poll items)\n");
-        for (int i = 0; i < n_ports; ++i) {
-            if (reps[i]) {
-                zmq_close(reps[i]);
-            }
-        }
+        for (int i = 0; i < n_ports; ++i) if (reps[i]) zmq_close(reps[i]);
         free(reps);
         zmq_ctx_destroy(context);
         return 1;
@@ -99,97 +89,107 @@ int main(int argc, char **argv) {
         items[i].fd = 0;
         items[i].events = ZMQ_POLLIN;
         items[i].revents = 0;
-        if (reps[i]) {
-            active++;
-        }
+        if (reps[i]) active++;
     }
 
     while (running && active > 0) {
         int rc = zmq_poll(items, n_ports, 1000);
         if (rc == -1) {
-            if (errno == EINTR) {
-                break;
-            }
+            if (errno == EINTR) break;
             perror("zmq_poll");
             break;
         }
 
         for (int i = 0; i < n_ports; ++i) {
-            if (!reps[i]) {
-                continue;
-            }
+            if (!reps[i]) continue;
             if (items[i].revents & ZMQ_POLLIN) {
                 char buffer[RECV_BUFFER_SIZE];
-                int r = zmq_recv(reps[i], buffer, sizeof(buffer), 0);
+                int r = zmq_recv(reps[i], buffer, sizeof(buffer) - 1, 0);
                 if (r < 0) {
-                    fprintf(stderr, "recv error on port %s: %s\n", argv[i + 1], zmq_strerror(zmq_errno()));
+                    fprintf(stderr, "recv error on port %s: %s\n", argv[i+1], zmq_strerror(zmq_errno()));
                     continue;
                 }
 
-                if (r >= (int)sizeof(buffer)) {
-                    send_reply(reps[i], "");
-                    continue;
-                }
+                /* null-terminate safely (buffer size is RECV_BUFFER_SIZE, recv used size-1) */
                 buffer[r] = '\0';
 
-                if (r < HEADER_LEN) {
-                    send_reply(reps[i], "");
-                    continue;
-                }
-
-                const char *type = buffer;
-                size_t msg_len = parse_msg_len(buffer + 3);
-                const char *payload = buffer + HEADER_LEN;
-
-                if (strncmp(type, "map", 3) == 0) {
-                    HashMap *hm = hm_create(1024);
-                    if (hm == NULL) {
-                        send_reply(reps[i], "");
+                /* Check for legacy 4-byte messages exactly */
+                if (r == 4) {
+                    if (memcmp(buffer, "map\0", 4) == 0) {
+                        /* Legacy map: reply with single NUL byte */
+                        zmq_send(reps[i], "\0", 1, 0);
+                        continue;
+                    } else if (memcmp(buffer, "rip\0", 4) == 0) {
+                        /* Legacy rip: reply with NUL byte then close */
+                        zmq_send(reps[i], "\0", 1, 0);
+                        zmq_close(reps[i]);
+                        reps[i] = NULL;
+                        items[i].socket = NULL;
+                        active--;
+                        printf("Closed worker on port %s\n", argv[i+1]);
                         continue;
                     }
-                    wc_tokenize_and_count(hm, payload);
-                    char *reply = wc_to_map_format(hm, msg_len);
-                    if (reply == NULL) {
-                        send_reply(reps[i], "");
-                    } else {
-                        send_reply(reps[i], reply);
-                        free(reply);
-                    }
-                    hm_free(hm);
-                } else if (strncmp(type, "red", 3) == 0) {
-                    HashMap *hm = wc_from_map_format(payload);
-                    if (hm == NULL) {
-                        send_reply(reps[i], "");
+                }
+
+                /* Check for new protocol messages (>= 6 bytes with 3-byte type and 3-byte length) */
+                if (r >= HEADER_LEN) {
+                    const char *type = buffer;
+                    size_t msg_len = parse_msg_len(buffer + 3);
+                    const char *payload = buffer + HEADER_LEN;
+
+                    if (strncmp(type, "map", 3) == 0) {
+                        /* New protocol map */
+                        HashMap *hm = hm_create(1024);
+                        if (hm == NULL) {
+                            zmq_send(reps[i], "\0", 1, 0);
+                            continue;
+                        }
+                        wc_tokenize_and_count(hm, payload);
+                        char *reply = wc_to_map_format(hm, msg_len);
+                        if (reply == NULL) {
+                            zmq_send(reps[i], "\0", 1, 0);
+                        } else {
+                            zmq_send(reps[i], reply, strlen(reply) + 1, 0);
+                            free(reply);
+                        }
+                        hm_free(hm);
+                        continue;
+                    } else if (strncmp(type, "red", 3) == 0) {
+                        /* New protocol reduce */
+                        HashMap *hm = wc_from_map_format(payload);
+                        if (hm == NULL) {
+                            zmq_send(reps[i], "\0", 1, 0);
+                            continue;
+                        }
+                        char *reply = wc_to_reduce_format(hm, msg_len);
+                        if (reply == NULL) {
+                            zmq_send(reps[i], "\0", 1, 0);
+                        } else {
+                            zmq_send(reps[i], reply, strlen(reply) + 1, 0);
+                            free(reply);
+                        }
+                        hm_free(hm);
+                        continue;
+                    } else if (strncmp(type, "rip", 3) == 0) {
+                        /* New protocol rip: reply with empty string (just \0) then close */
+                        zmq_send(reps[i], "\0", 1, 0);
+                        zmq_close(reps[i]);
+                        reps[i] = NULL;
+                        items[i].socket = NULL;
+                        active--;
+                        printf("Closed worker on port %s\n", argv[i+1]);
                         continue;
                     }
-                    char *reply = wc_to_reduce_format(hm, msg_len);
-                    if (reply == NULL) {
-                        send_reply(reps[i], "");
-                    } else {
-                        send_reply(reps[i], reply);
-                        free(reply);
-                    }
-                    hm_free(hm);
-                } else if (strncmp(type, "rip", 3) == 0) {
-                    send_reply(reps[i], "rip");
-                    zmq_close(reps[i]);
-                    reps[i] = NULL;
-                    items[i].socket = NULL;
-                    active--;
-                    printf("Closed worker on port %s\n", argv[i + 1]);
-                } else {
-                    send_reply(reps[i], "");
                 }
+
+                /* Unknown message: reply with empty string (just \0) */
+                zmq_send(reps[i], "\0", 1, 0);
             }
         }
     }
 
     free(items);
-    for (int i = 0; i < n_ports; ++i) {
-        if (reps[i]) {
-            zmq_close(reps[i]);
-        }
-    }
+    for (int i = 0; i < n_ports; ++i) if (reps[i]) zmq_close(reps[i]);
     free(reps);
     zmq_ctx_destroy(context);
     return 0;
