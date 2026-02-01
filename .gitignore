@@ -62,3 +62,31 @@ praxis1/.venv
 praxis1/.vscode
 praxis1/.rnvs_lock
 praxis1/tox.ini
+
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+*.exe
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Generated binaries (do not commit)
+demo_assignment
+demo_wordcount
+test_hashmap
+test_linked_list
+test_wordcount
+wc_demo
+zmq_worker
+zmq_distributor
+
+# Local scratch files
+hello
+world
+noch.txt
+test.txt
+*.jpeg
