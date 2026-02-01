@@ -2,13 +2,78 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "chunker.h"
 #include "combine.h"
 #include "distributor.h"
 
 #define MAX_MSG_LEN 1500
-#define PAYLOAD_MAX 1497
+#define HEADER_LEN 6
+#define PAYLOAD_MAX (MAX_MSG_LEN - HEADER_LEN - 1)  /* max payload that fits: 1500 - 6 - 1 (NUL) */
+
+static size_t find_safe_split(const char *data, size_t max_len) {
+    if (max_len == 0) return 0;
+    for (size_t i = max_len; i > 0; --i) {
+        if (i >= 1) {
+            char prev = data[i - 1];
+            char curr = data[i];
+            if (isdigit((unsigned char)prev) && isalpha((unsigned char)curr)) {
+                return i;
+            }
+        }
+    }
+    return max_len;
+}
+
+/* ================= MESSAGE BUILDER ================= */
+
+/**
+ * build_msg - Build a protocol message: type (3 bytes) + len3 (3 ASCII) + payload + NUL
+ * @out: output buffer (must be at least MAX_MSG_LEN)
+ * @type: 3-byte type (e.g., "map", "red", "rip")
+ * @msg_len: desired max message length (will be capped to MAX_MSG_LEN)
+ * @payload: NUL-terminated payload string (may be NULL or empty)
+ * @return: total message length including NUL terminator
+ */
+static size_t build_msg(char out[MAX_MSG_LEN], const char type[3],
+                        int msg_len, const char *payload)
+{
+    if (msg_len <= 0 || msg_len > MAX_MSG_LEN) {
+        msg_len = MAX_MSG_LEN;
+    }
+
+    /* Write type */
+    out[0] = type[0];
+    out[1] = type[1];
+    out[2] = type[2];
+
+    /* Write msg_len as 3 ASCII digits */
+    out[3] = '0' + (msg_len / 100) % 10;
+    out[4] = '0' + (msg_len / 10) % 10;
+    out[5] = '0' + msg_len % 10;
+
+    /* Calculate max payload length (accounting for header + NUL) */
+    int max_payload = msg_len - HEADER_LEN - 1;
+    if (max_payload < 1) {
+        max_payload = 1;  /* at least room for '\0' */
+    }
+
+    /* Copy payload, truncate if needed */
+    size_t payload_len = 0;
+    if (payload) {
+        payload_len = strlen(payload);
+        if (payload_len > (size_t)max_payload) {
+            payload_len = max_payload;
+        }
+        memcpy(out + HEADER_LEN, payload, payload_len);
+    }
+
+    /* Add NUL terminator */
+    out[HEADER_LEN + payload_len] = '\0';
+
+    return HEADER_LEN + payload_len + 1;
+}
 
 /* ================= BUFFER HELPERS ================= */
 
@@ -53,10 +118,12 @@ void buffer_free(buffer_t *b)
 void distributor_send_rip(void **sockets, int worker_count)
 {
     for (int i = 0; i < worker_count; i++) {
-        zmq_send(sockets[i], "rip", 4, 0);
+        /* Use legacy text protocol: "rip\0" */
+        zmq_send(sockets[i], "rip\0", 4, 0);
 
-        char reply[16];
-        zmq_recv(sockets[i], reply, sizeof(reply), 0);
+        char reply[MAX_MSG_LEN];
+        int reply_len = zmq_recv(sockets[i], reply, sizeof(reply) - 1, 0);
+        (void)reply_len;  /* unused, just drain the reply */
     }
 }
 
@@ -125,18 +192,19 @@ int main(int argc, char *argv[])
 
     while (chunker_next(&chunker, &chunk) == 1) {
         char msg[MAX_MSG_LEN];
-
-        strcpy(msg, "map");
-        strncat(msg, chunk, PAYLOAD_MAX);
+        /* Use legacy text protocol: "map" + payload + NUL */
+        snprintf(msg, sizeof(msg), "map%s", chunk);
 
         zmq_send(sockets[worker_idx], msg, strlen(msg) + 1, 0);
 
         char reply[MAX_MSG_LEN];
-        zmq_recv(sockets[worker_idx], reply, sizeof(reply), 0);
+        int reply_len = zmq_recv(sockets[worker_idx], reply, sizeof(reply) - 1, 0);
+        if (reply_len > 0) {
+            reply[reply_len] = '\0';
+            buffer_append(&map_results, reply);
+        }
 
-        buffer_append(&map_results, reply);
-
-        free(chunk);   /* IMPORTANT: prevent leak */
+        /* chunk is pointer to internal chunker buffer, do not free */
         worker_idx = (worker_idx + 1) % worker_count;
     }
 
@@ -152,20 +220,34 @@ int main(int argc, char *argv[])
 
     while (offset < map_results.len) {
         char msg[MAX_MSG_LEN];
-        strcpy(msg, "red");
 
         size_t remaining = map_results.len - offset;
-        size_t to_copy = remaining > PAYLOAD_MAX ? PAYLOAD_MAX : remaining;
+        size_t to_copy = remaining > (size_t)PAYLOAD_MAX ? (size_t)PAYLOAD_MAX : remaining;
 
-        strncat(msg, map_results.data + offset, to_copy);
+        if (remaining > (size_t)PAYLOAD_MAX) {
+            size_t safe = find_safe_split(map_results.data + offset, to_copy);
+            if (safe > 0 && safe < to_copy) {
+                to_copy = safe;
+            }
+        }
+
+        /* Extract chunk from map_results (may not be NUL-terminated at boundary) */
+        char payload_buf[PAYLOAD_MAX + 1];
+        memcpy(payload_buf, map_results.data + offset, to_copy);
+        payload_buf[to_copy] = '\0';
+
+        /* Use legacy text protocol: "red" + payload + NUL */
+        snprintf(msg, sizeof(msg), "red%s", payload_buf);
         offset += to_copy;
 
         zmq_send(sockets[worker_idx], msg, strlen(msg) + 1, 0);
 
         char reply[MAX_MSG_LEN];
-        zmq_recv(sockets[worker_idx], reply, sizeof(reply), 0);
-
-        buffer_append(&reduce_results, reply);
+        int reply_len = zmq_recv(sockets[worker_idx], reply, sizeof(reply) - 1, 0);
+        if (reply_len > 0) {
+            reply[reply_len] = '\0';
+            buffer_append(&reduce_results, reply);
+        }
 
         worker_idx = (worker_idx + 1) % worker_count;
     }
