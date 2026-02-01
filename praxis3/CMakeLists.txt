@@ -4,7 +4,14 @@ set(CMAKE_C_STANDARD 11)
 
 find_library(ZeroMQ zmq REQUIRED)
 
-add_executable(zmq_distributor zmq_distributor.c)
+add_executable(zmq_distributor
+    zmq_distributor.c
+    chunker.c
+    combine.c
+    hashmap.c
+    linked_list.c
+    wordcount.c
+)
 target_compile_options(zmq_distributor PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(zmq_distributor PRIVATE zmq pthread)
 
