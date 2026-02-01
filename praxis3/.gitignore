@@ -1,0 +1,6 @@
+
+# build artifacts
+zmq_worker
+zmq_distributor
+build/
+*.o
