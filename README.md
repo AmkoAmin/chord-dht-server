@@ -21,7 +21,7 @@ C11 · BSD Sockets · HTTP/1.1 · Chord DHT · ZeroMQ · CMake · Docker
 ## Run with Docker
 
 A multi-stage `Dockerfile` builds all three projects, and `docker-compose.yml`
-exposes one runnable demo per profile — no local toolchain needed:
+exposes one runnable demo per profile, with no local toolchain needed:
 
 ```bash
 # 1) MapReduce word count (one-shot, prints merged counts and exits)
