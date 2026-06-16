@@ -90,3 +90,16 @@ world
 noch.txt
 test.txt
 *.jpeg
+
+# --- TU course / submission artifacts (not part of the source) ---
+.rnvs_lock
+tox.ini
+*.pdf
+*todo.txt
+CHECKLIST.md
+
+# --- Local test binaries (keep the .c sources, ignore compiled output) ---
+hashtester
+praxis1/amins_tests/dynamic_list_tests
+praxis1/amins_tests/http_code_tests
+praxis1/amins_tests/test_file

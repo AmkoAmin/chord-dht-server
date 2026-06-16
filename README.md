@@ -1,159 +1,99 @@
-# 🖥️ Rechnernetze und Verteilte Systeme – Praxis Workflow
+# Rechnernetze und Verteilte Systeme
 
-Dies ist eine kompakte Anleitung zur Bearbeitung, zum Testen und zur Abgabe der Praxis-Aufgaben (Praxis 0, 1, 2) im Modul **Rechnernetze und Verteilte Systeme (EECS, TU Berlin)**.
+Systemnahe C-Implementierungen aus dem Modul **Rechnernetze und Verteilte Systeme**
+(EECS, TU Berlin). Die Projekte gehen von einem einfachen TCP-Socket bis zu einem
+verteilten Hash-Table-Ring und einem MapReduce-artigen WordCount über ZeroMQ.
 
----
+Schwerpunkte: **Netzwerkprogrammierung mit BSD-Sockets, das HTTP/1.1-Protokoll,
+verteilte Systeme (Chord-DHT) und Message-Passing-Parallelität.** Alles in C11,
+gebaut mit CMake.
 
-## 📦 1. Projekt-Setup
-
-1. Lade das Skeleton (`praxisX.skeleton.zip`) vom **ISIS-Kurs** herunter.  
-2. Entpacke es lokal, z. B. nach:
-   ```bash
-   mkdir -p ~/rnv && cd ~/rnv
-   unzip ~/Downloads/praxisX.skeleton.zip -d praxisX
-   ```
-3. Bearbeite die Aufgabe im Ordner (z. B. `hello_world.c`, `CMakeLists.txt`).
+[![CI](https://github.com/AmkoAmin/Rechnernetze-und-Verteilte-Systeme/actions/workflows/build.yml/badge.svg)](https://github.com/AmkoAmin/Rechnernetze-und-Verteilte-Systeme/actions/workflows/build.yml)
 
 ---
 
-## ⚙️ 2. Lokal kompilieren und testen
+## Projekte
 
-### Kompilieren:
-```bash
-cd ~/rnv/praxisX
-cmake -B build && make -C build
-./build/hello_world
-```
+### praxis0 — Toolchain & Setup
+Minimales „Hello World" zur Verifikation der CMake-/GCC-Toolchain.
 
-### (Optional) Lokales Testen:
-```bash
-./test.sh
-```
+### praxis1 — HTTP-Server über TCP
+Ein von Grund auf in C geschriebener Webserver auf Basis von BSD-Sockets
+(`getaddrinfo`, `socket`, `bind`, `listen`, `accept`). Verarbeitet HTTP/1.1-Requests
+und liefert passende Statuscodes. Eigener Message-Handler zum Parsen von
+Request-Zeilen, Headern und Body.
 
-> ⚠️ Achtung:  
-> Die Python-Tests funktionieren lokal **nicht zuverlässig**, da sie auf die EECS-Testumgebung (Ubuntu 20, Python 3.8, GCC 9) abgestimmt sind.  
-> Für die finale Bewertung müssen die Tests **auf dem TU-Server** bestehen.
+- **Kern:** `webserver.c`, `message_handler.c`
+- **Konzepte:** TCP-Verbindungen, HTTP-Request-Parsing, Statuscodes
 
----
+### praxis2 — HTTP-Server + Chord-DHT
+Erweiterung des Webservers zu einem Knoten in einem **Chord Distributed Hash Table**.
+Schlüssel werden über den Ring aus Knoten verteilt; Anfragen für fremde Schlüssel
+werden per UDP-Lookup an Successor/Predecessor weitergeleitet. Nutzt `poll()` für
+gleichzeitiges Bedienen von TCP- (HTTP) und UDP- (DHT) Sockets.
 
-## ☁️ 3. Projekt auf TU-Server hochladen
+- **Kern:** `webserver.c`, `http.c`, `data.c`, `util.c`
+- **Konzepte:** Distributed Hash Tables, Chord-Ring, UDP-Lookups, Event-Loop mit `poll()`
 
-> 💡 Stelle sicher, dass du im **TU-VPN** oder im **Eduroam-Netz** bist.
+### praxis3 — Verteiltes WordCount über ZeroMQ
+Ein MapReduce-artiger Aufbau: Ein **Distributor** zerteilt den Eingabetext in Chunks
+(an sicheren Wortgrenzen) und verteilt sie über ZeroMQ an mehrere **Worker**. Jeder
+Worker zählt Wörter in einer eigenen Hashmap; der Distributor führt die Teilergebnisse
+zusammen.
 
-Kopiere dein Projekt mit `scp` auf das TU-Dateisystem:
-
-```bash
-scp -r ~/rnv/praxisX/ aminskenderi@sshgate.tu-berlin.de:~/irb-ubuntu/
-```
-
-> Dadurch landet dein Projekt im Ordner  
-> `/home/tu-berlin.de/aminskenderi/irb-ubuntu/praxisX/`,  
-> wo es später auf den Ubuntu 20 EECS-Rechnern getestet wird.
-
----
-
-## 🔐 4. Verbindung zu den EECS-Servern herstellen
-
-Melde dich per SSH an:
-
-```bash
-ssh aminskenderi@ubu20.eecsit.tu-berlin.de
-```
-
-Wechsle danach in dein Projekt:
-
-```bash
-cd ~/irb-ubuntu/praxisX
-```
+- **Kern:** `zmq_distributor.c`, `zmq_worker.c`, `chunker.c`, `combine.c`, `hashmap.c`, `linked_list.c`
+- **Konzepte:** Message-Passing (ZeroMQ), Datenpartitionierung, Hashmap, MapReduce-Pattern
+- **Testdaten:** Public-Domain-Texte aus dem Project Gutenberg (`test_files/`)
 
 ---
 
-## 🧱 5. Auf dem Server kompilieren
+## Bauen
 
-> ❗ Falls du versehentlich den lokalen `build/`-Ordner mitkopiert hast:
-> ```bash
-> rm -rf build
-> ```
+Jedes Projekt ist eigenständig und wird mit CMake gebaut:
 
-Erstelle den Build-Ordner neu und kompiliere dein Programm:
 ```bash
+cd praxisX
 cmake -B build && make -C build
 ```
 
-Mit Alias (siehe unten) kannst du auch einfach `cb` schreiben.
+**Abhängigkeiten:** GCC/CMake (alle Projekte) und `libzmq3-dev` für praxis3.
 
----
-
-## 🧪 6. Testen auf dem Server
-
-### Einzelne Tests:
 ```bash
-./test.sh test/test_praxis<X>.py
+# Debian/Ubuntu
+sudo apt-get install build-essential cmake libzmq3-dev
 ```
 
-### Alle Tests:
-```bash
-./test.sh
-```
+### Reproduzierbar per Docker
 
-### Offizieller Bewertungs-Testlauf:
-```bash
-./test/check_submission.sh praxis<X>
-```
-
-> ✅ Wenn „1 passed“ erscheint, hast du alles richtig gemacht.
-
----
-
-## 📦 7. Abgabe erstellen
-
-Erzeuge die Abgabe mit CPack:
+Das mitgelieferte `Dockerfile` bildet die Build-Umgebung nach:
 
 ```bash
-make -C build package_source
-```
-
-→ Die Datei befindet sich danach unter:  
-`build/RN-Praxis-0.1.1-Source.tar.gz`
-
-Diese `.tar.gz`-Datei musst du auf **ISIS** hochladen.
-
----
-
-## ⚡ 8. Optional: Alias für schnelles Bauen
-
-Damit du den Build-Befehl kürzer schreiben kannst, füge in deine `~/.bashrc` ein:
-
-```bash
-alias cb='cmake -B build && make -C build'
-```
-
-Danach kannst du einfach schreiben:
-```bash
-cb
+docker build -t rnv . && docker run --rm -it -v "$PWD:/workspace" rnv
 ```
 
 ---
 
-## ✅ Zusammenfassung
+## Beispiele
 
-| Schritt | Befehl |
-|----------|--------|
-| Projekt hochladen | `scp -r praxisX/ aminskenderi@sshgate.tu-berlin.de:~/irb-ubuntu/` |
-| Auf Server verbinden | `ssh aminskenderi@ubu20.eecsit.tu-berlin.de` |
-| Kompilieren | `cmake -B build && make -C build` |
-| Testen | `./test.sh` oder `./test/check_submission.sh praxis<X>` |
-| Abgabe erzeugen | `make -C build package_source` |
+```bash
+# praxis1/2: Webserver auf Port 8080 starten
+./praxis1/build/webserver 0.0.0.0 8080
 
----
-
-## 🧠 Hinweise
-
-- Die Tests müssen **auf den Ubuntu 20 EECS-Rechnern** bestehen, nicht lokal.  
-- Verwende `rm -rf build` immer, wenn du ein Projekt kopiert hast, um alte Pfade zu löschen.  
-- Alle Pfade und Programme auf den Servern sind **case-sensitive** (z. B. `hello_world` ≠ `Hello_World`).  
-- Plane vor der Abgabefrist genügend Zeit für Upload und Tests ein.
+# praxis3: Worker und Distributor starten
+./praxis3/build/zmq_worker <distributor-host> <port>
+./praxis3/build/zmq_distributor <input-file> <worker-endpoints...>
+```
 
 ---
 
-© Technische Universität Berlin · Fachgebiet Telekommunikationsnetze (TKN)
+## Hinweis zu den Tests
+
+Die `test/`-Ordner enthalten das **vom Kurs vorgegebene Test-Skeleton** (TU Berlin / TKN),
+nicht meinen eigenen Code. Die Tests sind auf die EECS-Prüfumgebung abgestimmt
+(Ubuntu 20, Python 3.8, GCC 9) und laufen außerhalb davon nicht zuverlässig.
+Die CI in diesem Repo prüft daher, dass alle Projekte **fehlerfrei kompilieren**.
+
+---
+
+© Aufgabenstellung: Technische Universität Berlin · Fachgebiet Telekommunikationsnetze (TKN).
+Implementierung: Amin Skenderi.
