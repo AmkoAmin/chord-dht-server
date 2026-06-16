@@ -1,23 +1,35 @@
-FROM ubuntu:22.04
+# syntax=docker/dockerfile:1
+
+# ---------- build stage: compile all three projects ----------
+FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc-11 \
-    g++-11 \
-    cmake \
-    make \
-    python3 \
-    python3-pip \
-    ca-certificates \
+        build-essential \
+        cmake \
+        libzmq3-dev \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# gcc/g++ sollen auf gcc-11/g++-11 zeigen (wie auf vielen Systemen)
-RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100 \
- && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 100
+WORKDIR /src
+COPY . .
 
-# pytest exakt wie bei dir
-RUN python3 -m pip install --no-cache-dir pytest==6.2.5
+# Out-of-source build for each self-contained project.
+RUN for p in tcp-http-server chord-node mapreduce-wordcount; do \
+        cmake -B "$p/build" "$p" && make -C "$p/build"; \
+    done
 
-WORKDIR /workspace
+# ---------- runtime stage: slim image with the built binaries ----------
+FROM ubuntu:22.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libzmq5 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /src /app
+
+# Default: drop into a shell with all binaries pre-built under <project>/build/.
 CMD ["/bin/bash"]

@@ -1,0 +1,7 @@
+.git
+**/build/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+*.tar.gz
+**/.rnvs_lock

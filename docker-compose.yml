@@ -1,0 +1,80 @@
+# Build once, run any of the three demos via profiles:
+#   docker compose --profile http      up --build
+#   docker compose --profile wordcount up --build
+#   docker compose --profile chord     up --build
+#
+# All services share the same image built from the Dockerfile.
+
+services:
+  # ---- tcp-http-server: a single HTTP/1.1 server on :8080 ----
+  http:
+    build: .
+    image: chord-dht-server
+    profiles: ["http"]
+    command: ["/app/tcp-http-server/build/webserver", "0.0.0.0", "8080"]
+    ports:
+      - "8080:8080"
+
+  # ---- mapreduce-wordcount: one-shot end-to-end word count ----
+  wordcount:
+    build: .
+    image: chord-dht-server
+    profiles: ["wordcount"]
+    entrypoint: ["/app/docker/wordcount-demo.sh"]
+
+  # ---- chord-node: a 3-node DHT ring (static IPs, addresses are numeric) ----
+  chord1:
+    build: .
+    image: chord-dht-server
+    profiles: ["chord"]
+    command: ["/app/chord-node/build/webserver", "172.28.0.11", "8080", "16384"]
+    environment:
+      PRED_ID: "49152"
+      PRED_IP: "172.28.0.13"
+      PRED_PORT: "8080"
+      SUCC_ID: "32768"
+      SUCC_IP: "172.28.0.12"
+      SUCC_PORT: "8080"
+    networks:
+      chordnet:
+        ipv4_address: 172.28.0.11
+    ports:
+      - "8080:8080"   # query the ring via this node
+
+  chord2:
+    build: .
+    image: chord-dht-server
+    profiles: ["chord"]
+    command: ["/app/chord-node/build/webserver", "172.28.0.12", "8080", "32768"]
+    environment:
+      PRED_ID: "16384"
+      PRED_IP: "172.28.0.11"
+      PRED_PORT: "8080"
+      SUCC_ID: "49152"
+      SUCC_IP: "172.28.0.13"
+      SUCC_PORT: "8080"
+    networks:
+      chordnet:
+        ipv4_address: 172.28.0.12
+
+  chord3:
+    build: .
+    image: chord-dht-server
+    profiles: ["chord"]
+    command: ["/app/chord-node/build/webserver", "172.28.0.13", "8080", "49152"]
+    environment:
+      PRED_ID: "32768"
+      PRED_IP: "172.28.0.12"
+      PRED_PORT: "8080"
+      SUCC_ID: "16384"
+      SUCC_IP: "172.28.0.11"
+      SUCC_PORT: "8080"
+    networks:
+      chordnet:
+        ipv4_address: 172.28.0.13
+
+networks:
+  chordnet:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
