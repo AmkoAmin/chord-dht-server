@@ -1,98 +1,66 @@
-# Verteilte Systeme & Netzwerkprogrammierung in C
+# Chord DHT Server & Distributed Systems in C
 
-Systemnahe C-Implementierungen rund um Rechnernetze und verteilte Systeme.
-Die Projekte gehen von einem einfachen TCP-Socket bis zu einem verteilten
-Hash-Table-Ring und einem MapReduce-artigen WordCount über ZeroMQ.
-
-Schwerpunkte: **Netzwerkprogrammierung mit BSD-Sockets, das HTTP/1.1-Protokoll,
-verteilte Systeme (Chord-DHT) und Message-Passing-Parallelität.** Alles in C11,
-gebaut mit CMake.
+Low-level C projects in computer networking and distributed systems: a from-scratch
+HTTP/1.1 server over BSD sockets, extended into a node of a **Chord Distributed Hash
+Table**, plus a MapReduce-style distributed word count built on ZeroMQ message passing.
 
 [![CI](https://github.com/AmkoAmin/chord-dht-server/actions/workflows/build.yml/badge.svg)](https://github.com/AmkoAmin/chord-dht-server/actions/workflows/build.yml)
 
----
+## Stack
 
-## Projekte
+C11 · BSD Sockets · HTTP/1.1 · Chord DHT · ZeroMQ · CMake · Docker
 
-### praxis0 — Toolchain & Setup
-Minimales „Hello World" zur Verifikation der CMake-/GCC-Toolchain.
+## Projects
 
-### praxis1 — HTTP-Server über TCP
-Ein von Grund auf in C geschriebener Webserver auf Basis von BSD-Sockets
-(`getaddrinfo`, `socket`, `bind`, `listen`, `accept`). Verarbeitet HTTP/1.1-Requests
-und liefert passende Statuscodes. Eigener Message-Handler zum Parsen von
-Request-Zeilen, Headern und Body.
+| Project | What it does | Key concepts |
+|---|---|---|
+| `praxis0` | Toolchain sanity check ("Hello World") | CMake / GCC setup |
+| `praxis1` | HTTP/1.1 server over TCP, written from scratch (`getaddrinfo`, `socket`, `bind`, `listen`, `accept`); parses request lines, headers and body, returns proper status codes | TCP sockets, HTTP request parsing, status codes |
+| `praxis2` | Extends the server into a **Chord DHT** node; keys are distributed across the ring, requests for foreign keys are forwarded via UDP lookups to successor/predecessor, serving TCP (HTTP) and UDP (DHT) concurrently with `poll()` | Distributed hash tables, Chord ring, UDP lookups, event loop |
+| `praxis3` | **MapReduce-style word count**: a distributor splits input into chunks at safe word boundaries and dispatches them over ZeroMQ to multiple workers; each worker counts words in its own hashmap and results are merged | Message passing (ZeroMQ), data partitioning, hashmap, MapReduce |
 
-- **Kern:** `webserver.c`, `message_handler.c`
-- **Konzepte:** TCP-Verbindungen, HTTP-Request-Parsing, Statuscodes
+## Build
 
-### praxis2 — HTTP-Server + Chord-DHT
-Erweiterung des Webservers zu einem Knoten in einem **Chord Distributed Hash Table**.
-Schlüssel werden über den Ring aus Knoten verteilt; Anfragen für fremde Schlüssel
-werden per UDP-Lookup an Successor/Predecessor weitergeleitet. Nutzt `poll()` für
-gleichzeitiges Bedienen von TCP- (HTTP) und UDP- (DHT) Sockets.
-
-- **Kern:** `webserver.c`, `http.c`, `data.c`, `util.c`
-- **Konzepte:** Distributed Hash Tables, Chord-Ring, UDP-Lookups, Event-Loop mit `poll()`
-
-### praxis3 — Verteiltes WordCount über ZeroMQ
-Ein MapReduce-artiger Aufbau: Ein **Distributor** zerteilt den Eingabetext in Chunks
-(an sicheren Wortgrenzen) und verteilt sie über ZeroMQ an mehrere **Worker**. Jeder
-Worker zählt Wörter in einer eigenen Hashmap; der Distributor führt die Teilergebnisse
-zusammen.
-
-- **Kern:** `zmq_distributor.c`, `zmq_worker.c`, `chunker.c`, `combine.c`, `hashmap.c`, `linked_list.c`
-- **Konzepte:** Message-Passing (ZeroMQ), Datenpartitionierung, Hashmap, MapReduce-Pattern
-- **Testdaten:** Public-Domain-Texte aus dem Project Gutenberg (`test_files/`)
-
----
-
-## Bauen
-
-Jedes Projekt ist eigenständig und wird mit CMake gebaut:
+Each project is self-contained and built with CMake:
 
 ```bash
 cd praxisX
 cmake -B build && make -C build
 ```
 
-**Abhängigkeiten:** GCC/CMake (alle Projekte) und `libzmq3-dev` für praxis3.
+**Dependencies:** GCC/CMake (all projects) and `libzmq3-dev` for `praxis3`.
 
 ```bash
 # Debian/Ubuntu
 sudo apt-get install build-essential cmake libzmq3-dev
 ```
 
-### Reproduzierbar per Docker
+### Reproducible build with Docker
 
-Das mitgelieferte `Dockerfile` bildet die Build-Umgebung nach:
+The bundled `Dockerfile` reproduces the build environment:
 
 ```bash
 docker build -t rnv . && docker run --rm -it -v "$PWD:/workspace" rnv
 ```
 
----
-
-## Beispiele
+## Usage
 
 ```bash
-# praxis1/2: Webserver auf Port 8080 starten
+# praxis1 / praxis2: start the web server on port 8080
 ./praxis1/build/webserver 0.0.0.0 8080
 
-# praxis3: Worker und Distributor starten
+# praxis3: start workers, then the distributor
 ./praxis3/build/zmq_worker <distributor-host> <port>
 ./praxis3/build/zmq_distributor <input-file> <worker-endpoints...>
 ```
 
----
+## Tests
 
-## Hinweis zu den Tests
-
-Die `test/`-Ordner enthalten ein **vorgegebenes Test-Skeleton**, nicht meinen eigenen Code.
-Die Tests sind auf eine feste Prüfumgebung abgestimmt (Ubuntu 20, Python 3.8, GCC 9)
-und laufen außerhalb davon nicht zuverlässig. Die CI in diesem Repo prüft daher,
-dass alle Projekte **fehlerfrei kompilieren**.
+The `test/` folders contain a **provided test skeleton**, not my own code. The tests
+are tuned to a fixed grading environment (Ubuntu 20, Python 3.8, GCC 9) and are not
+reliable elsewhere. The CI in this repo therefore verifies that all projects **compile
+cleanly**.
 
 ---
 
-Implementierung: Amin Skenderi.
+Implementation: Amin Skenderi.
