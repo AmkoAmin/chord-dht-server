@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(RN-Praxis)
+project(tcp-http-server C)
 set(CMAKE_C_STANDARD 11)
 
 add_executable(webserver webserver.c message_handler.c)

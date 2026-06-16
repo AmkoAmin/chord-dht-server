@@ -16,14 +16,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake libzmq3-dev
 
-      - name: Build praxis0
-        run: cmake -B praxis0/build praxis0 && make -C praxis0/build
+      - name: Build tcp-http-server
+        run: cmake -B tcp-http-server/build tcp-http-server && make -C tcp-http-server/build
 
-      - name: Build praxis1
-        run: cmake -B praxis1/build praxis1 && make -C praxis1/build
+      - name: Build chord-node
+        run: cmake -B chord-node/build chord-node && make -C chord-node/build
 
-      - name: Build praxis2
-        run: cmake -B praxis2/build praxis2 && make -C praxis2/build
-
-      - name: Build praxis3
-        run: cmake -B praxis3/build praxis3 && make -C praxis3/build
+      - name: Build mapreduce-wordcount
+        run: cmake -B mapreduce-wordcount/build mapreduce-wordcount && make -C mapreduce-wordcount/build

@@ -14,21 +14,20 @@ C11 · BSD Sockets · HTTP/1.1 · Chord DHT · ZeroMQ · CMake · Docker
 
 | Project | What it does | Key concepts |
 |---|---|---|
-| `praxis0` | Toolchain sanity check ("Hello World") | CMake / GCC setup |
-| `praxis1` | HTTP/1.1 server over TCP, written from scratch (`getaddrinfo`, `socket`, `bind`, `listen`, `accept`); parses request lines, headers and body, returns proper status codes | TCP sockets, HTTP request parsing, status codes |
-| `praxis2` | Extends the server into a **Chord DHT** node; keys are distributed across the ring, requests for foreign keys are forwarded via UDP lookups to successor/predecessor, serving TCP (HTTP) and UDP (DHT) concurrently with `poll()` | Distributed hash tables, Chord ring, UDP lookups, event loop |
-| `praxis3` | **MapReduce-style word count**: a distributor splits input into chunks at safe word boundaries and dispatches them over ZeroMQ to multiple workers; each worker counts words in its own hashmap and results are merged | Message passing (ZeroMQ), data partitioning, hashmap, MapReduce |
+| `tcp-http-server` | HTTP/1.1 server over TCP, written from scratch (`getaddrinfo`, `socket`, `bind`, `listen`, `accept`); parses request lines, headers and body, returns proper status codes | TCP sockets, HTTP request parsing, status codes |
+| `chord-node` | Extends the server into a **Chord DHT** node; keys are distributed across the ring, requests for foreign keys are forwarded via UDP lookups to successor/predecessor, serving TCP (HTTP) and UDP (DHT) concurrently with `poll()` | Distributed hash tables, Chord ring, UDP lookups, event loop |
+| `mapreduce-wordcount` | **MapReduce-style word count**: a distributor splits input into chunks at safe word boundaries and dispatches them over ZeroMQ to multiple workers; each worker counts words in its own hashmap and results are merged | Message passing (ZeroMQ), data partitioning, hashmap, MapReduce |
 
 ## Build
 
 Each project is self-contained and built with CMake:
 
 ```bash
-cd praxisX
+cd <project>
 cmake -B build && make -C build
 ```
 
-**Dependencies:** GCC/CMake (all projects) and `libzmq3-dev` for `praxis3`.
+**Dependencies:** GCC/CMake (all projects) and `libzmq3-dev` for `mapreduce-wordcount`.
 
 ```bash
 # Debian/Ubuntu
@@ -46,12 +45,12 @@ docker build -t rnv . && docker run --rm -it -v "$PWD:/workspace" rnv
 ## Usage
 
 ```bash
-# praxis1 / praxis2: start the web server on port 8080
-./praxis1/build/webserver 0.0.0.0 8080
+# tcp-http-server / chord-node: start the web server on port 8080
+./tcp-http-server/build/webserver 0.0.0.0 8080
 
-# praxis3: start workers, then the distributor
-./praxis3/build/zmq_worker <distributor-host> <port>
-./praxis3/build/zmq_distributor <input-file> <worker-endpoints...>
+# mapreduce-wordcount: start workers, then the distributor
+./mapreduce-wordcount/build/zmq_worker <distributor-host> <port>
+./mapreduce-wordcount/build/zmq_distributor <input-file> <worker-endpoints...>
 ```
 
 ## Tests

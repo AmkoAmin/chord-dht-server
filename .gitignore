@@ -49,20 +49,6 @@ __pycache__/
 *.tmp
 *.bak
 
-# Ignore build dirs inside each praxis project
-praxis0/build/
-praxis1/build/
-
-# Ignore compiled binaries inside praxis dirs
-praxis0/hello_world
-praxis1/webserver
-praxis1/test_file
-
-praxis1/.venv
-praxis1/.vscode
-praxis1/.rnvs_lock
-praxis1/tox.ini
-
 # Build artifacts
 build/
 *.o
@@ -100,6 +86,6 @@ CHECKLIST.md
 
 # --- Local test binaries (keep the .c sources, ignore compiled output) ---
 hashtester
-praxis1/amins_tests/dynamic_list_tests
-praxis1/amins_tests/http_code_tests
-praxis1/amins_tests/test_file
+tcp-http-server/dev_tests/dynamic_list_tests
+tcp-http-server/dev_tests/http_code_tests
+tcp-http-server/dev_tests/test_file

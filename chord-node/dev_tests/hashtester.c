@@ -4,7 +4,7 @@
 #include <stdlib.h>
 
 /* include the implementation directly so we can call `pseudo_hash` */
-#include "../praxis2/util.c"
+#include "../util.c"
 
 static void print_hex(const unsigned char *buf, size_t len) {
     for (size_t i = 0; i < len; ++i) {
