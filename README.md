@@ -8,7 +8,7 @@ Schwerpunkte: **Netzwerkprogrammierung mit BSD-Sockets, das HTTP/1.1-Protokoll,
 verteilte Systeme (Chord-DHT) und Message-Passing-Parallelität.** Alles in C11,
 gebaut mit CMake.
 
-[![CI](https://github.com/AmkoAmin/Rechnernetze-und-Verteilte-Systeme/actions/workflows/build.yml/badge.svg)](https://github.com/AmkoAmin/Rechnernetze-und-Verteilte-Systeme/actions/workflows/build.yml)
+[![CI](https://github.com/AmkoAmin/chord-dht-server/actions/workflows/build.yml/badge.svg)](https://github.com/AmkoAmin/chord-dht-server/actions/workflows/build.yml)
 
 ---
 
