@@ -1,0 +1,3 @@
+# The test/ folders contain a provided test skeleton, not code authored here.
+# Exclude them from GitHub's language statistics (Linguist).
+praxis*/test/** linguist-vendored
