@@ -1,8 +1,8 @@
-# Rechnernetze und Verteilte Systeme
+# Verteilte Systeme & Netzwerkprogrammierung in C
 
-Systemnahe C-Implementierungen aus dem Modul **Rechnernetze und Verteilte Systeme**
-(EECS, TU Berlin). Die Projekte gehen von einem einfachen TCP-Socket bis zu einem
-verteilten Hash-Table-Ring und einem MapReduce-artigen WordCount über ZeroMQ.
+Systemnahe C-Implementierungen rund um Rechnernetze und verteilte Systeme.
+Die Projekte gehen von einem einfachen TCP-Socket bis zu einem verteilten
+Hash-Table-Ring und einem MapReduce-artigen WordCount über ZeroMQ.
 
 Schwerpunkte: **Netzwerkprogrammierung mit BSD-Sockets, das HTTP/1.1-Protokoll,
 verteilte Systeme (Chord-DHT) und Message-Passing-Parallelität.** Alles in C11,
@@ -88,12 +88,11 @@ docker build -t rnv . && docker run --rm -it -v "$PWD:/workspace" rnv
 
 ## Hinweis zu den Tests
 
-Die `test/`-Ordner enthalten das **vom Kurs vorgegebene Test-Skeleton** (TU Berlin / TKN),
-nicht meinen eigenen Code. Die Tests sind auf die EECS-Prüfumgebung abgestimmt
-(Ubuntu 20, Python 3.8, GCC 9) und laufen außerhalb davon nicht zuverlässig.
-Die CI in diesem Repo prüft daher, dass alle Projekte **fehlerfrei kompilieren**.
+Die `test/`-Ordner enthalten ein **vorgegebenes Test-Skeleton**, nicht meinen eigenen Code.
+Die Tests sind auf eine feste Prüfumgebung abgestimmt (Ubuntu 20, Python 3.8, GCC 9)
+und laufen außerhalb davon nicht zuverlässig. Die CI in diesem Repo prüft daher,
+dass alle Projekte **fehlerfrei kompilieren**.
 
 ---
 
-© Aufgabenstellung: Technische Universität Berlin · Fachgebiet Telekommunikationsnetze (TKN).
 Implementierung: Amin Skenderi.
